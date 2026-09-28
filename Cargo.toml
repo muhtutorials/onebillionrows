@@ -1,0 +1,12 @@
+[package]
+name = "onebillionrows"
+version = "0.1.0"
+edition = "2024"
+
+[profile.release]
+debug = true
+lto = "fat"
+panic = "abort"
+
+[dependencies]
+memmap2 = "0.9.11"

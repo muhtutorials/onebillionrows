@@ -1,0 +1,5 @@
+Run in PowerShell to measure execution time:
+Measure-Command { cargo r --release }
+
+Run in PowerShell to run it as administrator:
+Start-Process powershell -Verb runAs
