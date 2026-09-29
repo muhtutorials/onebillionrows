@@ -6,21 +6,18 @@ use memmap2::Mmap;
 use std::{
     collections::{BTreeMap, HashMap},
     fs::File,
-    hash::{BuildHasher, Hasher},
-    iter::once,
     os::raw::{c_int, c_void},
     simd::{cmp::SimdPartialEq, u8x64},
 };
 
 const SEMICOLON: u8x64 = u8x64::splat(b';');
 
-// 1. Custom hasher.
-// `Measure-Command { cargo r --release }` gives `TotalSeconds: 22,8231286`
+// 1. SIMD is used for splitting on `;`.
+// `Measure-Command { cargo r --release }` gives `TotalSeconds: 50,752172`
 fn main() {
     let file = File::open("measurements-100m.txt").unwrap();
     let mem_map = unsafe { Mmap::map(&file).unwrap() };
-    let mut stats: HashMap<Vec<u8>, (i16, i32, usize, i16), MyHasherBuilder> =
-        HashMap::with_capacity_and_hasher(10_000, MyHasherBuilder);
+    let mut stats: HashMap<Vec<u8>, (i16, i32, usize, i16)> = HashMap::new();
     let mut at = 0;
     loop {
         let line = next_line(&mem_map, &mut at);
@@ -109,33 +106,5 @@ fn split_on_semicolon(line: &[u8]) -> (&[u8], &[u8]) {
             .first_set()
             .expect("every line should have a semicolon");
         (&line[..index], &line[index + 1..])
-    }
-}
-
-struct MyHasher(u64);
-
-impl Hasher for MyHasher {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        let (chunks, remainder) = bytes.as_chunks::<8>();
-        let mut last = [1u8; 8];
-        last[..remainder.len()].copy_from_slice(remainder);
-        for &chunk in chunks.iter().chain(once(&last)) {
-            let mixed = self.0 as u128 * (u64::from_ne_bytes(chunk) as u128);
-            self.0 = (mixed >> 64 ^ mixed) as u64;
-        }
-    }
-}
-
-struct MyHasherBuilder;
-
-impl BuildHasher for MyHasherBuilder {
-    type Hasher = MyHasher;
-
-    fn build_hasher(&self) -> Self::Hasher {
-        MyHasher(0xcbf29ce484222325)
     }
 }

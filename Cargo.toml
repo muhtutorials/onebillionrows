@@ -9,4 +9,5 @@ lto = "fat"
 panic = "abort"
 
 [dependencies]
+libc = "0.2.189"
 memmap2 = "0.9.11"
