@@ -14,7 +14,8 @@ use std::{
 
 const SEMICOLON: u8x64 = u8x64::splat(b';');
 
-// 1. Custom hasher.
+// 1. `HashMap` is created with initial capacity to reduce allocations.
+// 2. Custom hasher is used for `HashMap`.
 // `Measure-Command { cargo r --release }` gives `TotalSeconds: 22,8231286`
 fn main() {
     let file = File::open("measurements-100m.txt").unwrap();
