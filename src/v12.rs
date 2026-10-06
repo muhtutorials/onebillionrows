@@ -17,7 +17,7 @@ use std::{
 const SEMICOLON: u8x64 = u8x64::splat(b';');
 const NEWLINE: u8x64 = u8x64::splat(b'\n');
 
-// 1. .
+// 1. Branchless `parse_temperature`.
 // `Measure-Command { cargo r --release }` gives `TotalSeconds: 34,1920216`
 fn main() {
     let file = File::open("measurements-100m.txt").unwrap();

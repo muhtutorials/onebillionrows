@@ -15,20 +15,20 @@ use std::{
 };
 
 const SEMICOLON: u8x64 = u8x64::splat(b';');
-const NEWLINE: u8x64 = u8x64::splat(b'\n');
 
-// 1. .
-// `Measure-Command { cargo r --release }` gives `TotalSeconds: 34,1920216`
+// 1. Improved `Hasher`.
+// `Measure-Command { cargo r --release }` gives `TotalSeconds: 31,2035175`
 fn main() {
     let file = File::open("measurements-100m.txt").unwrap();
     let mem_map = unsafe { Mmap::map(&file).unwrap() };
     let mut stats: HashMap<StrVec, (i16, i32, usize, i16), MyHasherBuilder> =
         HashMap::with_capacity_and_hasher(10_000, MyHasherBuilder);
     let mut at = 0;
-    while at < mem_map.len() {
-        let new_line_at = at + next_line(&mem_map[at..]);
-        let line = &mem_map[at..new_line_at];
-        at = new_line_at + 1;
+    loop {
+        let line = next_line(&mem_map, &mut at);
+        if line.is_empty() {
+            break;
+        }
         let (station, temperature) = split_on_semicolon(line);
         let stats = match stats.get_mut(station) {
             Some(stats) => stats,
@@ -152,48 +152,42 @@ impl Borrow<[u8]> for StrVec {
     }
 }
 
-fn next_line(mem_map: &[u8]) -> usize {
-    let simd_line = u8x64::load_or_default(mem_map);
-    let mask = NEWLINE.simd_eq(simd_line);
-    if let Some(index) = mask.first_set() {
-        index
-    } else {
-        // new line wasn't found in the first 64 bytes
-        let rest = &mem_map[64..];
-        let next_new_line =
+fn next_line<'a>(mem_map: &'a [u8], at: &mut usize) -> &'a [u8] {
+    let rest = &mem_map[*at..];
+    let next_new_line =
         // `memchr` returns a pointer to the location of the byte,
         // or a null pointer if no such byte is found
         unsafe { memchr(rest.as_ptr() as *const c_void, b'\n' as c_int, rest.len()) };
-        // shouldn't reach this point, handled outside this function
-        assert!(!next_new_line.is_null());
+    let line = if next_new_line.is_null() {
+        rest
+    } else {
         // SAFETY: mem_char always returns a pointer in `rest`,
         // which is always valid.
         let len = unsafe { (next_new_line as *const u8).offset_from(rest.as_ptr()) };
-        64 + len as usize
-    }
+        &rest[..len as usize]
+    };
+    // `+ 1` skips the `\n`
+    *at += line.len() + 1;
+    line
 }
 
 fn parse_temperature(t: &[u8]) -> i16 {
-    let t_len = t.len();
-    // If first char is '-' → t[0] != b'-' is false → 0 * 2 - 1 = -1 → negative,
-    // otherwise → true → 1 * 2 - 1 = 1 → positive.
-    let sign = i16::from(t[0] != b'-') * 2 - 1;
-    // offset to skip the minus sign when reading digits
-    let skip = if t[0] == b'-' { 1 } else { 0 };
-    // If the string is 4 bytes ("12.3") the digit of
-    // the integer part must be multiplied by 100.
-    // Otherwise 3 bytes ("4.5"), it's just 10.
-    let mul = if t_len - skip == 4 { 100 } else { 10 };
-    // first digit becomes 100 ("12.3") or 40 ("4.5")
-    let t1 = mul * i16::from(t[skip] - b'0');
-    // if it's a two digit value ("4.5") `t2` is ignored and second digit is `t3`,
-    // otherwise it gives 20 ("12.3").
-    // t_len = 5 ("-12.3"), t_len - 3 = 2, hence t[2] = 2.
-    // t_len = 4 ("12.3"), t_len - 3 = 1, hence t[1] = 2.
-    let t2 = if mul == 10 { 0 } else { 1 } * 10 * i16::from(t[t_len - 3] - b'0');
-    // the last digit after "."
-    let t3 = i16::from(t[t_len - 1] - b'0');
-    sign * (t1 + t2 + t3)
+    let mut temperature: i16 = 0;
+    let mut mul = 1;
+    for &byte in t.iter().rev() {
+        match byte {
+            b'.' => continue,
+            b'-' => {
+                temperature = -temperature;
+                break;
+            }
+            _ => {
+                temperature += i16::from(byte - b'0') * mul;
+                mul *= 10;
+            }
+        }
+    }
+    temperature
 }
 
 fn split_on_semicolon(line: &[u8]) -> (&[u8], &[u8]) {
