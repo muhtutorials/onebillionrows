@@ -20,7 +20,7 @@ use std::{
 const SEMICOLON: u8x64 = u8x64::splat(b';');
 const NEWLINE: u8x64 = u8x64::splat(b'\n');
 
-// 1. .
+// 1. Parallelism was added for data processing.
 // `Measure-Command { cargo r --release }` gives `TotalSeconds: 5,4082363`
 fn main() {
     let file = File::open("measurements-100m.txt").unwrap();

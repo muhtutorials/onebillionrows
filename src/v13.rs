@@ -5,7 +5,6 @@ use libc::memchr;
 use memmap2::Mmap;
 use std::{
     borrow::Borrow,
-    collections::btree_map::Entry,
     collections::{BTreeMap, HashMap},
     fs::File,
     hash::{BuildHasher, Hash, Hasher},
@@ -13,75 +12,21 @@ use std::{
     ptr::{copy, slice_from_raw_parts_mut},
     simd::{cmp::SimdPartialEq, u8x64},
     slice::from_raw_parts,
-    sync::mpsc::sync_channel,
-    thread::{available_parallelism, scope},
 };
 
 const SEMICOLON: u8x64 = u8x64::splat(b';');
 const NEWLINE: u8x64 = u8x64::splat(b'\n');
 
-// 1. .
-// `Measure-Command { cargo r --release }` gives `TotalSeconds: 5,4082363`
+// 1. Improved `next_line` function.
+// `Measure-Command { cargo r --release }` gives `TotalSeconds: 28,1111927`
 fn main() {
     let file = File::open("measurements-100m.txt").unwrap();
     let mem_map = unsafe { Mmap::map(&file).unwrap() };
-    let mut stats = BTreeMap::new();
-    scope(|scope| {
-        let n_threads = available_parallelism().unwrap().get();
-        let mut at = 0;
-        // `mpsc::sync_channel` is just bounded `mpsc::channel`
-        let (tx, rx) = sync_channel(n_threads);
-        let chunk_size = mem_map.len() / n_threads;
-        for _ in 0..n_threads {
-            let start = at;
-            let mut end = (at + chunk_size).min(mem_map.len());
-            if end != mem_map.len() {
-                let new_line_at = find_new_line(&mem_map[end..]);
-                end = end + new_line_at + 1;
-            };
-            at = end;
-            let tx = tx.clone();
-            let mem_map = &mem_map[start..end];
-            scope.spawn(move || tx.send(process(mem_map)));
-        }
-        drop(tx);
-        for chunk in rx {
-            for (k, v) in chunk {
-                match stats.entry(unsafe { String::from_utf8_unchecked(k.as_ref().to_vec()) }) {
-                    Entry::Vacant(entry) => {
-                        entry.insert(v);
-                    }
-                    Entry::Occupied(entry) => {
-                        let stat = entry.into_mut();
-                        stat.0 = stat.0.min(v.0); // min
-                        stat.1 += v.1; // sum
-                        stat.2 += v.2; // count
-                        stat.3 = stat.3.max(v.3); // max
-                    }
-                }
-            }
-        }
-    });
-    print!("{{");
-    let mut stats = stats.into_iter().peekable();
-    while let Some((station, (min, sum, count, max))) = stats.next() {
-        let min = (min as f64) / 10.;
-        let avg = sum as f64 / 10. / count as f64;
-        let max = (max as f64) / 10.;
-        print!("{station}={min:.1}/{avg:.1}/{max:.1}");
-        if stats.peek().is_some() {
-            print!(", ")
-        }
-    }
-    print!("}}");
-}
-
-fn process(mem_map: &[u8]) -> HashMap<StrVec, (i16, i32, usize, i16), MyHasherBuilder> {
     let mut stats: HashMap<StrVec, (i16, i32, usize, i16), MyHasherBuilder> =
         HashMap::with_capacity_and_hasher(10_000, MyHasherBuilder);
     let mut at = 0;
     while at < mem_map.len() {
-        let new_line_at = at + find_new_line(unsafe { mem_map.get_unchecked(at..) });
+        let new_line_at = at + next_line(unsafe { mem_map.get_unchecked(at..) });
         let line = &mem_map[at..new_line_at];
         at = new_line_at + 1;
         let (station, temperature) = split_on_semicolon(line);
@@ -97,7 +42,22 @@ fn process(mem_map: &[u8]) -> HashMap<StrVec, (i16, i32, usize, i16), MyHasherBu
         stats.2 += 1;
         stats.3 = stats.3.max(temp);
     }
-    stats
+    print!("{{");
+    let stats = stats
+        .iter()
+        .map(|(k, v)| (unsafe { str::from_utf8_unchecked(k.as_ref()) }, *v));
+    let stats: BTreeMap<&str, (i16, i32, usize, i16)> = BTreeMap::from_iter(stats);
+    let mut stats = stats.into_iter().peekable();
+    while let Some((station, (min, sum, count, max))) = stats.next() {
+        let min = (min as f64) / 10.;
+        let avg = sum as f64 / 10. / count as f64;
+        let max = (max as f64) / 10.;
+        print!("{station}={min:.1}/{avg:.1}/{max:.1}");
+        if stats.peek().is_some() {
+            print!(", ")
+        }
+    }
+    print!("}}");
 }
 
 // `StrVec` is a union type with the size of 16 bytes, where the first byte is
@@ -191,9 +151,7 @@ impl Borrow<[u8]> for StrVec {
     }
 }
 
-unsafe impl Send for StrVec {}
-
-fn find_new_line(mem_map: &[u8]) -> usize {
+fn next_line(mem_map: &[u8]) -> usize {
     let simd_line = if let Some((arr, _)) = mem_map.split_first_chunk::<64>() {
         u8x64::from_array(*arr)
     } else {

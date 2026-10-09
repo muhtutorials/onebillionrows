@@ -119,8 +119,7 @@ impl AsRef<[u8]> for StrVec {
                 if end.is_null() {
                     &self.inlined[1..]
                 } else {
-                    // `-1` takes into account that the first byte is a tag.
-                    let len = (end as *const u8).offset_from(self.inlined.as_ptr()) - 1;
+                    let len = (end as *const u8).offset_from(self.inlined.as_ptr());
                     &self.inlined[1..len as usize]
                 }
             } else {
